@@ -15,7 +15,8 @@ if (!isset($_SESSION['user'])) {
 
 // Get dashboard statistics
 $stats = getSystemStats();
-$pendingRequests = getAllPendingRequests();
+$activeRequests = getAllActiveRequests();
+$pendingPayments = getAllPendingPayments();
 
 // Start content
 ob_start();
@@ -99,42 +100,191 @@ ob_start();
         </div>
     </div>
 
-    <!-- Pending Requests Table -->
+    <!-- Active Requests Table -->
     <div class="card mb-4">
         <div class="card-header">
-            <h5 class="card-title mb-0">Pending Collection Requests</h5>
+            <h5 class="card-title mb-0">
+                <i class="bx bx-clipboard"></i> Active Collection Requests
+                <small class="text-muted">(Auto-assigned to zone collectors)</small>
+            </h5>
         </div>
         <div class="card-body">
             <div class="table-responsive">
-                <table id="pendingRequestsTable" class="table table-striped">
+                <table id="activeRequestsTable" class="table table-striped">
                     <thead>
                         <tr>
                             <th>ID</th>
                             <th>Client</th>
-                            <th>Location</th>
+                            <th>Location (Zone)</th>
                             <th>Pickup Date</th>
                             <th>Status</th>
+                            <th>Assigned Collector</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php 
+                        $has_active_requests = false;
+                        $request_rows = [];
+                        
+                        // Store all request data first
+                        while ($request = $activeRequests->fetch_assoc()) {
+                            $has_active_requests = true;
+                            $request_rows[] = $request;
+                        }
+                        
+                        if ($has_active_requests):
+                            foreach ($request_rows as $request):
+                        ?>
+                        <tr>
+                            <td>
+                                <strong>#<?= $request['id'] ?></strong>
+                            </td>
+                            <td>
+                                <div>
+                                    <strong><?= htmlspecialchars($request['client_name']) ?></strong>
+                                    <br>
+                                    <small class="text-muted">
+                                        <i class="bx bx-envelope"></i> <?= htmlspecialchars($request['client_email']) ?>
+                                        <?php if ($request['client_phone']): ?>
+                                            <br><i class="bx bx-phone"></i> <?= htmlspecialchars($request['client_phone']) ?>
+                                        <?php endif; ?>
+                                    </small>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="badge bg-info">
+                                    <i class="bx bx-map"></i> <?= htmlspecialchars($request['location']) ?>
+                                </span>
+                            </td>
+                            <td>
+                                <i class="bx bx-calendar"></i> <?= formatDate($request['pickup_date']) ?>
+                            </td>
+                            <td><?= getStatusBadge($request['status']) ?></td>
+                            <td>
+                                <?php if ($request['collector_name']): ?>
+                                    <div class="d-flex align-items-center">
+                                        <div class="avatar-sm bg-success rounded-circle me-2 d-flex align-items-center justify-content-center">
+                                            <i class="bx bx-user text-white"></i>
+                                        </div>
+                                        <div>
+                                            <strong><?= htmlspecialchars($request['collector_name']) ?></strong>
+                                            <br>
+                                            <small class="text-muted">
+                                                <i class="bx bx-envelope"></i> <?= htmlspecialchars($request['collector_email']) ?>
+                                                <?php if ($request['collector_phone']): ?>
+                                                    <br><i class="bx bx-phone"></i> <?= htmlspecialchars($request['collector_phone']) ?>
+                                                <?php endif; ?>
+                                            </small>
+                                        </div>
+                                    </div>
+                                <?php else: ?>
+                                    <div class="text-warning">
+                                        <i class="bx bx-exclamation-triangle"></i>
+                                        <strong>No collector assigned</strong>
+                                        <br>
+                                        <small class="text-muted">Zone has no collectors</small>
+                                    </div>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <?php 
+                            endforeach;
+                        else:
+                        ?>
+                        <tr>
+                            <td colspan="6" class="border-0 p-0">
+                                <?php
+                                $type = 'pending_requests';
+                                include APP_PATH . '/views/includes/empty_state.php';
+                                ?>
+                            </td>
+                        </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pending Payments Table -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="card-title mb-0">Pending Payments</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table id="pendingPaymentsTable" class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Payment ID</th>
+                            <th>Client</th>
+                            <th>Request Details</th>
+                            <th>Amount</th>
+                            <th>Date Submitted</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php while ($request = $pendingRequests->fetch_assoc()): ?>
+                        <?php 
+                        $has_pending_payments = false;
+                        $payment_rows = [];
+                        
+                        // Store all payment data first
+                        while ($payment = $pendingPayments->fetch_assoc()) {
+                            $has_pending_payments = true;
+                            $payment_rows[] = $payment;
+                        }
+                        
+                        if ($has_pending_payments):
+                            foreach ($payment_rows as $payment):
+                        ?>
                         <tr>
-                            <td><?= $request['id'] ?></td>
-                            <td><?= htmlspecialchars($request['client_name']) ?></td>
-                            <td><?= htmlspecialchars($request['location']) ?></td>
-                            <td><?= formatDate($request['pickup_date']) ?></td>
-                            <td><?= getStatusBadge($request['status']) ?></td>
+                            <td>#<?= $payment['id'] ?></td>
                             <td>
-                                <button type="button" class="btn btn-sm btn-primary assign-collector" 
-                                        data-id="<?= $request['id'] ?>"
-                                        data-bs-toggle="modal" 
-                                        data-bs-target="#assignCollectorModal">
-                                    <i class="bx bx-user-plus"></i> Assign
+                                <?= htmlspecialchars($payment['client_name']) ?>
+                                <br>
+                                <small class="text-muted"><?= htmlspecialchars($payment['client_email']) ?></small>
+                            </td>
+                            <td>
+                                <strong>Location:</strong> <?= htmlspecialchars($payment['location']) ?>
+                                <br>
+                                <small class="text-muted">
+                                    <i class="bx bx-calendar"></i> <?= formatDate($payment['pickup_date']) ?>
+                                    <?php if ($payment['collector_name']): ?>
+                                        <br><i class="bx bx-user"></i> <?= htmlspecialchars($payment['collector_name']) ?>
+                                    <?php endif; ?>
+                                </small>
+                            </td>
+                            <td><?= formatCurrency($payment['amount']) ?></td>
+                            <td><?= formatDateTime($payment['created_at']) ?></td>
+                            <td>
+                                <button type="button" class="btn btn-sm btn-success approve-payment" 
+                                        data-id="<?= $payment['id'] ?>"
+                                        data-amount="<?= formatCurrency($payment['amount']) ?>"
+                                        data-client="<?= htmlspecialchars($payment['client_name']) ?>">
+                                    <i class="bx bx-check"></i> Approve
+                                </button>
+                                <button type="button" class="btn btn-sm btn-danger reject-payment" 
+                                        data-id="<?= $payment['id'] ?>"
+                                        data-amount="<?= formatCurrency($payment['amount']) ?>"
+                                        data-client="<?= htmlspecialchars($payment['client_name']) ?>">
+                                    <i class="bx bx-x"></i> Reject
                                 </button>
                             </td>
                         </tr>
-                        <?php endwhile; ?>
+                        <?php 
+                            endforeach;
+                        else:
+                        ?>
+                        <tr>
+                            <td colspan="6" class="border-0 p-0">
+                                <?php
+                                $type = 'pending_payments';
+                                include APP_PATH . '/views/includes/empty_state.php';
+                                ?>
+                            </td>
+                        </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
@@ -142,115 +292,154 @@ ob_start();
     </div>
 </div>
 
-<!-- Assign Collector Modal -->
-<div class="modal fade" id="assignCollectorModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <form id="assignCollectorForm" method="POST" action="<?= url('admin/requests/assign') ?>">
-                <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
-                <input type="hidden" name="request_id" id="requestId">
-                <div class="modal-header">
-                    <h5 class="modal-title">Assign Collector</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label">Select Collector</label>
-                        <select class="form-select select2" name="collector_id" required>
-                            <option value="">Choose a collector...</option>
-                            <?php
-                            $collectors = getAllCollectors();
-                            while ($collector = $collectors->fetch_assoc()) {
-                                echo '<option value="' . $collector['id'] . '">' . htmlspecialchars($collector['name']) . ' (' . htmlspecialchars($collector['email']) . ')</option>';
-                            }
-                            ?>
-                        </select>
-                    </div>
-                    <div class="alert alert-info">
-                        <i class="bx bx-info-circle"></i>
-                        <strong>Note:</strong> Assigning a collector will change the request status to "Assigned" and notify the collector.
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bx bx-user-plus"></i> Assign Collector
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
+<!-- Assign Collector Modal Removed - Collectors are now auto-assigned based on zones -->
+
+<style>
+.avatar-sm {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+}
+
+.table td {
+    vertical-align: middle;
+}
+
+.badge.bg-info {
+    background-color: #0dcaf0 !important;
+}
+
+.text-warning strong {
+    color: #f8a100 !important;
+}
+
+.table-responsive {
+    border-radius: 8px;
+}
+
+.card-header h5 small {
+    font-size: 0.75rem;
+    font-weight: normal;
+}
+</style>
 
 <script>
 $(document).ready(function() {
     // Initialize DataTable
-    $('#pendingRequestsTable').DataTable({
+    $('#activeRequestsTable').DataTable({
         order: [[0, 'desc']],
         responsive: true,
         pageLength: 10
     });
 
-    // Initialize Select2 for collector selection
-    $('#assignCollectorModal .select2').select2({
-        theme: 'bootstrap-5',
-        width: '100%',
-        dropdownParent: $('#assignCollectorModal')
+    // Initialize DataTable for pending payments
+    $('#pendingPaymentsTable').DataTable({
+        order: [[4, 'desc']], // Sort by date submitted
+        responsive: true,
+        pageLength: 10
     });
 
-    // Handle Assign Collector
-    $('.assign-collector').click(function() {
-        const requestId = $(this).data('id');
-        $('#requestId').val(requestId);
+    // Collector assignment functionality removed - now handled automatically by zone assignment
+
+    // Approve payment button handler
+    $('.approve-payment').on('click', function() {
+        var paymentId = $(this).data('id');
+        var amount = $(this).data('amount');
+        var client = $(this).data('client');
         
-        // Reset form
-        $('#assignCollectorForm')[0].reset();
-        $('#assignCollectorModal .select2').val('').trigger('change');
+        Swal.fire({
+            title: 'Approve Payment?',
+            html: `
+                <p><strong>Client:</strong> ${client}</p>
+                <p><strong>Amount:</strong> ${amount}</p>
+                <p>Are you sure you want to approve this payment?</p>
+            `,
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonColor: '#28a745',
+            cancelButtonColor: '#6c757d',
+            confirmButtonText: 'Yes, Approve',
+            cancelButtonText: 'Cancel'
+        }).then((result) => {
+            if (result.isConfirmed) {
+                updatePaymentStatus(paymentId, 'completed');
+            }
+        });
     });
 
-    // Handle form submission with SweetAlert
-    $('#assignCollectorForm').submit(function(e) {
-        e.preventDefault();
+    // Reject payment button handler
+    $('.reject-payment').on('click', function() {
+        var paymentId = $(this).data('id');
+        var amount = $(this).data('amount');
+        var client = $(this).data('client');
         
-        const formData = $(this).serialize();
-        const submitBtn = $(this).find('button[type="submit"]');
-        const originalText = submitBtn.html();
-        
-        // Show loading state
-        submitBtn.html('<i class="bx bx-loader-alt bx-spin"></i> Assigning...').prop('disabled', true);
-        
-        $.post($(this).attr('action'), formData, function(response) {
-            if (response.success) {
+        Swal.fire({
+            title: 'Reject Payment?',
+            html: `
+                <p><strong>Client:</strong> ${client}</p>
+                <p><strong>Amount:</strong> ${amount}</p>
+                <p>Are you sure you want to reject this payment?</p>
+            `,
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#dc3545',
+            cancelButtonColor: '#6c757d',
+            confirmButtonText: 'Yes, Reject',
+            cancelButtonText: 'Cancel'
+        }).then((result) => {
+            if (result.isConfirmed) {
+                updatePaymentStatus(paymentId, 'failed');
+            }
+        });
+    });
+
+    // Function to update payment status
+    function updatePaymentStatus(paymentId, status) {
+        // Create form data
+        var formData = new FormData();
+        formData.append('payment_id', paymentId);
+        formData.append('status', status);
+        formData.append('csrf_token', '<?= generateCSRFToken() ?>');
+        formData.append('update_payment', 'true');
+
+        // Show loading
+        Swal.fire({
+            title: 'Processing...',
+            text: 'Updating payment status',
+            allowOutsideClick: false,
+            didOpen: () => {
+                Swal.showLoading();
+            }
+        });
+
+        // Send AJAX request
+        fetch('<?= url('admin/payments/update') ?>', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => {
+            if (response.ok) {
                 Swal.fire({
                     title: 'Success!',
-                    text: response.message || 'Collector assigned successfully',
+                    text: 'Payment status updated successfully',
                     icon: 'success',
-                    confirmButtonText: 'OK',
-                    confirmButtonColor: '#3085d6'
+                    confirmButtonColor: '#28a745'
                 }).then(() => {
                     location.reload();
                 });
             } else {
-                Swal.fire({
-                    title: 'Error!',
-                    text: response.message || 'Failed to assign collector',
-                    icon: 'error',
-                    confirmButtonText: 'OK',
-                    confirmButtonColor: '#d33'
-                });
+                throw new Error('Network response was not ok');
             }
-        }).fail(function() {
+        })
+        .catch(error => {
+            console.error('Error:', error);
             Swal.fire({
                 title: 'Error!',
-                text: 'Network error. Please try again.',
+                text: 'Failed to update payment status',
                 icon: 'error',
-                confirmButtonText: 'OK',
-                confirmButtonColor: '#d33'
+                confirmButtonColor: '#dc3545'
             });
-        }).always(function() {
-            // Reset button state
-            submitBtn.html(originalText).prop('disabled', false);
         });
-    });
+    }
 });
 </script>

@@ -13,94 +13,27 @@ if (!isset($_SESSION['user'])) {
     redirect($_SESSION['user']['role']);
 }
 
-// Mock data for reports
-$requests_stats = [
-    'total_requests' => 156,
-    'completed_requests' => 142,
-    'pending_requests' => 10,
-    'cancelled_requests' => 4
-];
+// Handle date range filtering
+$date_range = $_GET['date_range'] ?? '30';
+$start_date = $_GET['start_date'] ?? '';
+$end_date = $_GET['end_date'] ?? '';
 
-$payment_stats = [
-    'total_payments' => 142,
-    'total_revenue' => 28400.00,
-    'average_payment' => 200.00,
-    'collected_revenue' => 28400.00
-];
+// Determine the number of days based on filter
+if ($date_range === 'custom' && $start_date && $end_date) {
+    $start = new DateTime($start_date);
+    $end = new DateTime($end_date);
+    $days = $end->diff($start)->days + 1;
+} else {
+    $days = (int)$date_range;
+}
 
-// Mock data for top collectors
-$top_collectors = [
-    [
-        'collector_name' => 'John Smith',
-        'total_collections' => 45,
-        'total_revenue' => 9000.00
-    ],
-    [
-        'collector_name' => 'Sarah Johnson',
-        'total_collections' => 38,
-        'total_revenue' => 7600.00
-    ],
-    [
-        'collector_name' => 'Michael Brown',
-        'total_collections' => 32,
-        'total_revenue' => 6400.00
-    ],
-    [
-        'collector_name' => 'Emily Davis',
-        'total_collections' => 28,
-        'total_revenue' => 5600.00
-    ],
-    [
-        'collector_name' => 'David Wilson',
-        'total_collections' => 25,
-        'total_revenue' => 5000.00
-    ]
-];
-
-// Mock data for zone statistics
-$zone_stats = [
-    [
-        'zone_name' => 'North Zone',
-        'total_requests' => 45,
-        'completed_requests' => 42,
-        'total_revenue' => 9000.00
-    ],
-    [
-        'zone_name' => 'South Zone',
-        'total_requests' => 38,
-        'completed_requests' => 35,
-        'total_revenue' => 7600.00
-    ],
-    [
-        'zone_name' => 'East Zone',
-        'total_requests' => 32,
-        'completed_requests' => 30,
-        'total_revenue' => 6400.00
-    ],
-    [
-        'zone_name' => 'West Zone',
-        'total_requests' => 28,
-        'completed_requests' => 25,
-        'total_revenue' => 5600.00
-    ],
-    [
-        'zone_name' => 'Central Zone',
-        'total_requests' => 25,
-        'completed_requests' => 22,
-        'total_revenue' => 5000.00
-    ]
-];
-
-// Mock data for revenue trend
-$revenue_trend = [
-    ['date' => '2024-03-01', 'total_revenue' => 1200],
-    ['date' => '2024-03-02', 'total_revenue' => 1500],
-    ['date' => '2024-03-03', 'total_revenue' => 1800],
-    ['date' => '2024-03-04', 'total_revenue' => 1600],
-    ['date' => '2024-03-05', 'total_revenue' => 2000],
-    ['date' => '2024-03-06', 'total_revenue' => 2200],
-    ['date' => '2024-03-07', 'total_revenue' => 2400]
-];
+// Get real data from database
+$requests_stats = getRequestStats();
+$payment_stats = getPaymentStats();
+$top_collectors = getTopCollectors(5);
+$zone_stats = getZoneStats();
+$revenue_trend = getRevenueTrend($days);
+$satisfaction_stats = getCustomerSatisfactionStats();
 ?>
 
 <div class="container-fluid">
@@ -126,23 +59,23 @@ $revenue_trend = [
             <h5 class="card-title mb-0">Filter Options</h5>
         </div>
         <div class="card-body">
-            <form id="dateRangeForm" class="row g-3">
+            <form id="dateRangeForm" method="GET" class="row g-3">
                 <div class="col-md-4">
                     <label class="form-label">Date Range</label>
-                    <select class="form-select" id="dateRange">
-                        <option value="7">Last 7 Days</option>
-                        <option value="30" selected>Last 30 Days</option>
-                        <option value="90">Last 90 Days</option>
-                        <option value="custom">Custom Range</option>
+                    <select class="form-select" name="date_range" id="dateRange">
+                        <option value="7" <?= $date_range == '7' ? 'selected' : '' ?>>Last 7 Days</option>
+                        <option value="30" <?= $date_range == '30' ? 'selected' : '' ?>>Last 30 Days</option>
+                        <option value="90" <?= $date_range == '90' ? 'selected' : '' ?>>Last 90 Days</option>
+                        <option value="custom" <?= $date_range == 'custom' ? 'selected' : '' ?>>Custom Range</option>
                     </select>
                 </div>
-                <div class="col-md-3 custom-date d-none">
+                <div class="col-md-3 custom-date <?= $date_range != 'custom' ? 'd-none' : '' ?>">
                     <label class="form-label">Start Date</label>
-                    <input type="date" class="form-control" id="startDate">
+                    <input type="date" class="form-control" name="start_date" id="startDate" value="<?= htmlspecialchars($start_date) ?>">
                 </div>
-                <div class="col-md-3 custom-date d-none">
+                <div class="col-md-3 custom-date <?= $date_range != 'custom' ? 'd-none' : '' ?>">
                     <label class="form-label">End Date</label>
-                    <input type="date" class="form-control" id="endDate">
+                    <input type="date" class="form-control" name="end_date" id="endDate" value="<?= htmlspecialchars($end_date) ?>">
                 </div>
                 <div class="col-md-2">
                     <label class="form-label">&nbsp;</label>
@@ -181,14 +114,14 @@ $revenue_trend = [
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
                             <h6 class="text-muted mb-2">Total Revenue</h6>
-                            <h4 class="mb-0">$<?= number_format($payment_stats['total_revenue'], 2) ?></h4>
+                            <h4 class="mb-0"><?= formatCurrency($payment_stats['total_revenue']) ?></h4>
                             <p class="text-success mb-0">
                                 <i class="bx bx-up-arrow-alt"></i>
-                                $<?= number_format($payment_stats['average_payment'], 2) ?> average
+                                <?= formatCurrency($payment_stats['average_payment']) ?> average
                             </p>
                         </div>
                         <div class="text-success">
-                            <i class="bx bx-dollar" style="font-size: 2.5rem;"></i>
+                            <i class="bx bx-peso" style="font-size: 2.5rem;"></i>
                         </div>
                     </div>
                 </div>
@@ -200,7 +133,7 @@ $revenue_trend = [
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
                             <h6 class="text-muted mb-2">Completion Rate</h6>
-                            <h4 class="mb-0"><?= number_format(($requests_stats['completed_requests'] / $requests_stats['total_requests']) * 100, 1) ?>%</h4>
+                            <h4 class="mb-0"><?= $requests_stats['total_requests'] > 0 ? number_format(($requests_stats['completed_requests'] / $requests_stats['total_requests']) * 100, 1) : 0 ?>%</h4>
                             <p class="text-warning mb-0">
                                 <i class="bx bx-time"></i>
                                 <?= number_format($requests_stats['pending_requests']) ?> pending
@@ -219,10 +152,10 @@ $revenue_trend = [
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
                             <h6 class="text-muted mb-2">Customer Satisfaction</h6>
-                            <h4 class="mb-0">4.8 ⭐</h4>
+                            <h4 class="mb-0"><?= $satisfaction_stats['score'] ?> ⭐</h4>
                             <p class="text-success mb-0">
                                 <i class="bx bx-up-arrow-alt"></i>
-                                Based on <?= number_format($requests_stats['completed_requests']) ?> reviews
+                                Based on <?= number_format($satisfaction_stats['total_reviews']) ?> completed requests
                             </p>
                         </div>
                         <div class="text-warning">
@@ -277,24 +210,40 @@ $revenue_trend = [
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach ($top_collectors as $collector): ?>
-                                    <tr>
-                                        <td><?= htmlspecialchars($collector['collector_name']) ?></td>
-                                        <td><?= $collector['total_collections'] ?></td>
-                                        <td>$<?= number_format($collector['total_revenue'], 2) ?></td>
-                                        <td>
-                                            <div class="progress">
-                                                <div class="progress-bar bg-success" role="progressbar" 
-                                                    style="width: <?= ($collector['total_collections'] / $requests_stats['total_requests']) * 100 ?>%"
-                                                    aria-valuenow="<?= ($collector['total_collections'] / $requests_stats['total_requests']) * 100 ?>" 
-                                                    aria-valuemin="0" 
-                                                    aria-valuemax="100">
-                                                    <?= number_format(($collector['total_collections'] / $requests_stats['total_requests']) * 100, 1) ?>%
+                                <?php if (!empty($top_collectors)): ?>
+                                    <?php foreach ($top_collectors as $collector): ?>
+                                        <tr>
+                                            <td><?= htmlspecialchars($collector['collector_name']) ?></td>
+                                            <td><?= number_format($collector['total_collections']) ?></td>
+                                            <td><?= formatCurrency($collector['total_revenue']) ?></td>
+                                            <td>
+                                                <div class="progress">
+                                                    <?php 
+                                                    $percentage = $requests_stats['total_requests'] > 0 ? 
+                                                        ($collector['total_collections'] / $requests_stats['total_requests']) * 100 : 0;
+                                                    ?>
+                                                    <div class="progress-bar bg-success" role="progressbar" 
+                                                        style="width: <?= $percentage ?>%"
+                                                        aria-valuenow="<?= $percentage ?>" 
+                                                        aria-valuemin="0" 
+                                                        aria-valuemax="100">
+                                                        <?= number_format($percentage, 1) ?>%
+                                                    </div>
                                                 </div>
-                                            </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <tr>
+                                        <td colspan="4" class="border-0 p-0">
+                                            <?php
+                                            $type = 'collectors';
+                                            $size = 'small';
+                                            include APP_PATH . '/views/includes/empty_state.php';
+                                            ?>
                                         </td>
                                     </tr>
-                                <?php endforeach; ?>
+                                <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
@@ -318,24 +267,40 @@ $revenue_trend = [
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach ($zone_stats as $zone): ?>
-                                    <tr>
-                                        <td><?= htmlspecialchars($zone['zone_name']) ?></td>
-                                        <td><?= $zone['total_requests'] ?></td>
-                                        <td>$<?= number_format($zone['total_revenue'], 2) ?></td>
-                                        <td>
-                                            <div class="progress">
-                                                <div class="progress-bar bg-info" role="progressbar" 
-                                                    style="width: <?= ($zone['completed_requests'] / $zone['total_requests']) * 100 ?>%"
-                                                    aria-valuenow="<?= ($zone['completed_requests'] / $zone['total_requests']) * 100 ?>" 
-                                                    aria-valuemin="0" 
-                                                    aria-valuemax="100">
-                                                    <?= number_format(($zone['completed_requests'] / $zone['total_requests']) * 100, 1) ?>%
+                                <?php if (!empty($zone_stats)): ?>
+                                    <?php foreach ($zone_stats as $zone): ?>
+                                        <tr>
+                                            <td><?= htmlspecialchars($zone['zone_name']) ?></td>
+                                            <td><?= number_format($zone['total_requests']) ?></td>
+                                            <td><?= formatCurrency($zone['total_revenue']) ?></td>
+                                            <td>
+                                                <div class="progress">
+                                                    <?php 
+                                                    $completion_rate = $zone['total_requests'] > 0 ? 
+                                                        ($zone['completed_requests'] / $zone['total_requests']) * 100 : 0;
+                                                    ?>
+                                                    <div class="progress-bar bg-info" role="progressbar" 
+                                                        style="width: <?= $completion_rate ?>%"
+                                                        aria-valuenow="<?= $completion_rate ?>" 
+                                                        aria-valuemin="0" 
+                                                        aria-valuemax="100">
+                                                        <?= number_format($completion_rate, 1) ?>%
+                                                    </div>
                                                 </div>
-                                            </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <tr>
+                                        <td colspan="4" class="border-0 p-0">
+                                            <?php
+                                            $type = 'zones';
+                                            $size = 'small';
+                                            include APP_PATH . '/views/includes/empty_state.php';
+                                            ?>
                                         </td>
                                     </tr>
-                                <?php endforeach; ?>
+                                <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
@@ -357,29 +322,20 @@ $(document).ready(function() {
         }
     });
 
-    // Handle form submission with SweetAlert
+    // Handle form submission - show loading while page reloads
     $('#dateRangeForm').on('submit', function(e) {
-        e.preventDefault();
-        
         Swal.fire({
             title: 'Loading...',
             text: 'Updating reports with new filter',
             allowOutsideClick: false,
+            showConfirmButton: false,
             didOpen: () => {
                 Swal.showLoading();
             }
         });
         
-        // Simulate loading
-        setTimeout(() => {
-            Swal.fire({
-                title: 'Success!',
-                text: 'Reports updated successfully',
-                icon: 'success',
-                confirmButtonText: 'OK',
-                confirmButtonColor: '#3085d6'
-            });
-        }, 1500);
+        // Allow the form to submit normally
+        return true;
     });
 
     // Initialize Charts
@@ -390,9 +346,9 @@ $(document).ready(function() {
     new Chart(document.getElementById('requestsByZoneChart'), {
         type: 'pie',
         data: {
-            labels: zoneData.map(z => z.zone_name),
+            labels: zoneData.length > 0 ? zoneData.map(z => z.zone_name) : ['No Data'],
             datasets: [{
-                data: zoneData.map(z => z.total_requests),
+                data: zoneData.length > 0 ? zoneData.map(z => parseInt(z.total_requests)) : [1],
                 backgroundColor: [
                     '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e', '#e74a3b',
                     '#858796', '#5a5c69', '#2e59d9', '#17a673', '#2c9faf'
@@ -413,10 +369,10 @@ $(document).ready(function() {
     new Chart(document.getElementById('revenueTrendChart'), {
         type: 'line',
         data: {
-            labels: revenueData.map(r => r.date),
+            labels: revenueData.length > 0 ? revenueData.map(r => r.date) : ['No Data'],
             datasets: [{
                 label: 'Revenue',
-                data: revenueData.map(r => r.total_revenue),
+                data: revenueData.length > 0 ? revenueData.map(r => parseFloat(r.total_revenue)) : [0],
                 borderColor: '#1cc88a',
                 backgroundColor: 'rgba(28, 200, 138, 0.1)',
                 tension: 0.1,
@@ -435,7 +391,7 @@ $(document).ready(function() {
                     beginAtZero: true,
                     ticks: {
                         callback: function(value) {
-                            return '$' + value.toLocaleString();
+                            return '₱' + value.toLocaleString();
                         }
                     }
                 }

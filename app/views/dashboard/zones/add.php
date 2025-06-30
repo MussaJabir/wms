@@ -11,6 +11,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (verifyCSRFToken($_POST['csrf_token'] ?? '')) {
         $name = sanitize($_POST['name'] ?? '');
         $description = sanitize($_POST['description'] ?? '');
+        $price = floatval($_POST['price'] ?? 0);
 
         // Validate input
         if (empty($name)) {
@@ -23,19 +24,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('admin/zones');
         }
 
+        if ($price < 0) {
+            setFlashMessage('error', 'Price cannot be negative');
+            redirect('admin/zones');
+        }
+
         // Check if zone name already exists
-        global $conn;
-        $stmt = $conn->prepare("SELECT id FROM zones WHERE LOWER(name) = LOWER(?)");
-        $stmt->bind_param("s", $name);
-        $stmt->execute();
-        if ($stmt->get_result()->num_rows > 0) {
+        if (zoneNameExists($name)) {
             setFlashMessage('error', 'Zone name already exists');
             redirect('admin/zones');
         }
 
         // Create zone using database function
-        if (createZone($name, $description)) {
-            setFlashMessage('success', 'Zone added successfully');
+        if (createZone($name, $description, $price)) {
+            setFlashMessage('success', 'Zone added successfully with price ' . formatCurrency($price));
         } else {
             setFlashMessage('error', 'Failed to add zone. Please try again.');
         }

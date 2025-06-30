@@ -48,7 +48,18 @@ ob_start();
                         global $conn;
                         $query = "SELECT * FROM users ORDER BY id DESC";
                         $users = $conn->query($query);
-                        while ($user = $users->fetch_assoc()):
+                        
+                        $has_users = false;
+                        $user_rows = [];
+                        
+                        // Store all user data first
+                        while ($user = $users->fetch_assoc()) {
+                            $has_users = true;
+                            $user_rows[] = $user;
+                        }
+                        
+                        if ($has_users):
+                            foreach ($user_rows as $user):
                         ?>
                         <tr>
                             <td><?= $user['id'] ?></td>
@@ -68,7 +79,19 @@ ob_start();
                                 <?php endif; ?>
                             </td>
                         </tr>
-                        <?php endwhile; ?>
+                        <?php 
+                            endforeach;
+                        else:
+                        ?>
+                        <tr>
+                            <td colspan="7" class="border-0 p-0">
+                                <?php
+                                $type = 'users';
+                                include APP_PATH . '/views/includes/empty_state.php';
+                                ?>
+                            </td>
+                        </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>

@@ -56,6 +56,7 @@ $routes = [
     '/admin/zones/get' => 'dashboard/zones/get.php',
     '/admin/zones/collectors' => 'dashboard/zones/collectors.php',
     '/admin/requests/assign' => 'dashboard/requests/assign.php',
+    '/admin/payments/update' => 'dashboard/payments/update.php',
     '/admin/reports' => 'dashboard/reports.php',
     
     // Additional collector routes
@@ -64,7 +65,11 @@ $routes = [
     
     // Additional client routes
     '/requests' => 'dashboard/requests.php',
-    '/client_profile' => 'dashboard/client_profile.php'
+    '/client_profile' => 'dashboard/client_profile.php',
+    
+    // Admin-specific routes for viewing all data
+    '/admin/requests' => 'dashboard/requests.php',
+    '/admin/payments' => 'dashboard/admin_payments.php'
 ];
 
 // Function to get route

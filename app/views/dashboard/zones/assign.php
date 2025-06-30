@@ -30,44 +30,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('admin/zones');
         }
 
-        global $conn;
+        // Assign collectors using database function
+        $success_count = assignMultipleCollectorsToZone($zone_id, $collector_ids);
         
-        // Start transaction
-        $conn->begin_transaction();
-        
-        try {
-            // Remove all existing assignments for this zone
-            $stmt = $conn->prepare("DELETE FROM zone_collectors WHERE zone_id = ?");
-            $stmt->bind_param("i", $zone_id);
-            $stmt->execute();
-            
-            // Add new assignments
-            $success_count = 0;
-            foreach ($collector_ids as $collector_id) {
-                $collector_id = (int)$collector_id;
-                
-                // Check if collector exists and is a collector
-                $stmt = $conn->prepare("SELECT id FROM users WHERE id = ? AND role = 'collector'");
-                $stmt->bind_param("i", $collector_id);
-                $stmt->execute();
-                if ($stmt->get_result()->num_rows > 0) {
-                    // Assign collector to zone
-                    if (assignCollectorToZone($zone_id, $collector_id)) {
-                        $success_count++;
-                    }
-                }
-            }
-            
-            $conn->commit();
-            
-            if ($success_count > 0) {
-                setFlashMessage('success', "Successfully assigned {$success_count} collector(s) to zone");
-            } else {
-                setFlashMessage('error', 'No valid collectors were assigned');
-            }
-            
-        } catch (Exception $e) {
-            $conn->rollback();
+        if ($success_count !== false && $success_count > 0) {
+            setFlashMessage('success', "Successfully assigned {$success_count} collector(s) to zone");
+        } elseif ($success_count === 0) {
+            setFlashMessage('error', 'No valid collectors were assigned');
+        } else {
             setFlashMessage('error', 'Failed to assign collectors. Please try again.');
         }
     } else {

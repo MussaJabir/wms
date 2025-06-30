@@ -88,6 +88,26 @@ function getAllPendingRequests() {
     return $conn->query($sql);
 }
 
+// Get all active requests (pending and assigned) for admin dashboard
+function getAllActiveRequests() {
+    global $conn;
+    
+    $sql = "SELECT r.*, 
+            c.name as client_name,
+            c.email as client_email,
+            c.phone as client_phone,
+            col.name as collector_name,
+            col.email as collector_email,
+            col.phone as collector_phone
+            FROM requests r
+            LEFT JOIN users c ON r.client_id = c.id
+            LEFT JOIN users col ON r.collector_id = col.id
+            WHERE r.status IN ('pending', 'assigned')
+            ORDER BY r.status ASC, r.created_at DESC";
+            
+    return $conn->query($sql);
+}
+
 // Get all collectors
 function getAllCollectors() {
     global $conn;
@@ -102,6 +122,36 @@ function assignCollector($request_id, $collector_id) {
     
     $stmt = $conn->prepare("UPDATE requests SET collector_id = ?, status = 'assigned', updated_at = NOW() WHERE id = ?");
     $stmt->bind_param("ii", $collector_id, $request_id);
+    
+    return $stmt->execute();
+}
+
+// Get all pending payments
+function getAllPendingPayments() {
+    global $conn;
+    
+    $sql = "SELECT p.*, 
+            r.location, 
+            r.pickup_date,
+            c.name as client_name,
+            c.email as client_email,
+            col.name as collector_name
+            FROM payments p
+            JOIN requests r ON p.request_id = r.id
+            JOIN users c ON r.client_id = c.id
+            LEFT JOIN users col ON r.collector_id = col.id
+            WHERE p.status = 'pending'
+            ORDER BY p.created_at DESC";
+            
+    return $conn->query($sql);
+}
+
+// Update payment status
+function updatePaymentStatus($payment_id, $status) {
+    global $conn;
+    
+    $stmt = $conn->prepare("UPDATE payments SET status = ?, updated_at = NOW() WHERE id = ?");
+    $stmt->bind_param("si", $status, $payment_id);
     
     return $stmt->execute();
 }
@@ -127,6 +177,7 @@ function createTables() {
             id INT AUTO_INCREMENT PRIMARY KEY,
             name VARCHAR(100) NOT NULL,
             description TEXT,
+            price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )",
@@ -174,8 +225,35 @@ function createTables() {
     }
 }
 
-// Get client requests
+// Get client requests (show all requests except those fully paid and cancelled ones)
 function getClientRequests($client_id) {
+    global $conn;
+    
+    $sql = "SELECT r.*, 
+            c.name as collector_name,
+            p.status as payment_status,
+            p.amount as payment_amount
+            FROM requests r
+            LEFT JOIN users c ON r.collector_id = c.id
+            LEFT JOIN payments p ON r.id = p.request_id
+            WHERE r.client_id = ? 
+            AND r.status != 'cancelled'
+            AND (
+                r.status != 'completed' 
+                OR p.status IS NULL 
+                OR p.status != 'completed'
+            )
+            ORDER BY r.created_at DESC";
+            
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $client_id);
+    $stmt->execute();
+    
+    return $stmt->get_result();
+}
+
+// Get all client requests including fully completed ones (for history/admin purposes)
+function getAllClientRequests($client_id) {
     global $conn;
     
     $sql = "SELECT r.*, 
@@ -225,8 +303,8 @@ function updateRequestStatus($request_id, $status) {
     return $stmt->execute();
 }
 
-// Create payment
-function createPayment($client_id, $request_id, $amount) {
+// Create payment with payment method details
+function createPayment($client_id, $request_id, $amount, $payment_type, $payment_details = []) {
     global $conn;
     
     // Verify the request belongs to the client
@@ -239,11 +317,54 @@ function createPayment($client_id, $request_id, $amount) {
         return false; // Request doesn't belong to client
     }
     
-    // Create payment record
-    $stmt = $conn->prepare("INSERT INTO payments (request_id, amount, status, payment_date) VALUES (?, ?, 'pending', NOW())");
-    $stmt->bind_param("id", $request_id, $amount);
-    
-    return $stmt->execute();
+    // Create phone payment record
+    if ($payment_type === 'phone') {
+        $phone_provider = $payment_details['phone_provider'] ?? null;
+        $stmt = $conn->prepare("
+            INSERT INTO payments (request_id, amount, payment_type, phone_provider, status, payment_date) 
+            VALUES (?, ?, ?, ?, 'pending', NOW())
+        ");
+        $stmt->bind_param("idss", $request_id, $amount, $payment_type, $phone_provider);
+        
+        if ($stmt->execute()) {
+            $payment_id = $conn->insert_id;
+            
+            // Send payment confirmation email
+            require_once __DIR__ . '/email_service.php';
+            
+            // Get client details for email
+            $client_stmt = $conn->prepare("SELECT name, email FROM users WHERE id = ?");
+            $client_stmt->bind_param("i", $client_id);
+            $client_stmt->execute();
+            $client_result = $client_stmt->get_result();
+            
+            if ($client = $client_result->fetch_assoc()) {
+                // Get request location
+                $request_stmt = $conn->prepare("SELECT location FROM requests WHERE id = ?");
+                $request_stmt->bind_param("i", $request_id);
+                $request_stmt->execute();
+                $request_result = $request_stmt->get_result();
+                $request_data = $request_result->fetch_assoc();
+                
+                // Prepare email data
+                $email_data = [
+                    'provider' => $phone_provider,
+                    'amount' => $amount,
+                    'location' => $request_data['location'] ?? 'Not specified',
+                    'payment_id' => $payment_id
+                ];
+                
+                // Send email
+                sendPaymentConfirmationEmail($client['email'], $client['name'], $email_data);
+            }
+            
+            return true;
+        }
+        
+        return false;
+    } else {
+        return false; // Invalid payment type
+    }
 }
 
 // Get client payments
@@ -263,17 +384,88 @@ function getClientPayments($client_id) {
     return $stmt->get_result();
 }
 
-// Create new request
+// Create new request with automatic collector assignment
 function createRequest($client_id, $location, $pickup_date, $notes = '') {
     global $conn;
     
-    $stmt = $conn->prepare("
-        INSERT INTO requests (client_id, location, pickup_date, notes)
-        VALUES (?, ?, ?, ?)
-    ");
-    $stmt->bind_param("isss", $client_id, $location, $pickup_date, $notes);
+    // Start transaction
+    $conn->begin_transaction();
     
-    return $stmt->execute();
+    try {
+        // First, find the zone by name (location)
+        $stmt = $conn->prepare("SELECT id FROM zones WHERE name = ?");
+        $stmt->bind_param("s", $location);
+        $stmt->execute();
+        $zone_result = $stmt->get_result();
+        
+        if ($zone_result->num_rows > 0) {
+            $zone = $zone_result->fetch_assoc();
+            $zone_id = $zone['id'];
+            
+            // Get collectors assigned to this zone
+            $stmt = $conn->prepare("
+                SELECT u.id FROM users u
+                INNER JOIN zone_collectors zc ON u.id = zc.collector_id
+                WHERE zc.zone_id = ? AND u.role = 'collector'
+                ORDER BY RAND()
+                LIMIT 1
+            ");
+            $stmt->bind_param("i", $zone_id);
+            $stmt->execute();
+            $collector_result = $stmt->get_result();
+            
+            if ($collector_result->num_rows > 0) {
+                $collector = $collector_result->fetch_assoc();
+                $collector_id = $collector['id'];
+                
+                // Create request with assigned collector
+                $stmt = $conn->prepare("
+                    INSERT INTO requests (client_id, collector_id, location, pickup_date, notes, status)
+                    VALUES (?, ?, ?, ?, ?, 'assigned')
+                ");
+                $stmt->bind_param("iisss", $client_id, $collector_id, $location, $pickup_date, $notes);
+                
+                if ($stmt->execute()) {
+                    $conn->commit();
+                    return true;
+                } else {
+                    throw new Exception("Failed to create request");
+                }
+            } else {
+                // No collectors assigned to this zone, create request as pending
+                $stmt = $conn->prepare("
+                    INSERT INTO requests (client_id, location, pickup_date, notes, status)
+                    VALUES (?, ?, ?, ?, 'pending')
+                ");
+                $stmt->bind_param("isss", $client_id, $location, $pickup_date, $notes);
+                
+                if ($stmt->execute()) {
+                    $conn->commit();
+                    return true;
+                } else {
+                    throw new Exception("Failed to create request");
+                }
+            }
+        } else {
+            // Zone not found, create request as pending
+            $stmt = $conn->prepare("
+                INSERT INTO requests (client_id, location, pickup_date, notes, status)
+                VALUES (?, ?, ?, ?, 'pending')
+            ");
+            $stmt->bind_param("isss", $client_id, $location, $pickup_date, $notes);
+            
+            if ($stmt->execute()) {
+                $conn->commit();
+                return true;
+            } else {
+                throw new Exception("Failed to create request");
+            }
+        }
+    } catch (Exception $e) {
+        $conn->rollback();
+        error_log("Error creating request: " . $e->getMessage());
+        return false;
+    }
 }
 
 // Update client profile
@@ -449,12 +641,12 @@ function deleteUser($user_id) {
 // Zone Management Functions
 
 // Create new zone
-function createZone($name, $description = '') {
+function createZone($name, $description = '', $price = 0.00) {
     global $conn;
     
     $stmt = $conn->prepare("
-        INSERT INTO zones (name, description, created_at, updated_at) 
-        VALUES (?, ?, NOW(), NOW())
+        INSERT INTO zones (name, description, price, created_at, updated_at) 
+        VALUES (?, ?, ?, NOW(), NOW())
     ");
     
     if (!$stmt) {
@@ -462,7 +654,7 @@ function createZone($name, $description = '') {
         return false;
     }
     
-    $stmt->bind_param("ss", $name, $description);
+    $stmt->bind_param("ssd", $name, $description, $price);
     
     if (!$stmt->execute()) {
         error_log("Zone creation - Execute failed: " . $stmt->error);
@@ -476,7 +668,7 @@ function createZone($name, $description = '') {
 function getAllZones() {
     global $conn;
     
-    $sql = "SELECT id, name, description, created_at FROM zones ORDER BY name ASC";
+    $sql = "SELECT id, name, description, price, created_at FROM zones ORDER BY name ASC";
     return $conn->query($sql);
 }
 
@@ -484,11 +676,37 @@ function getAllZones() {
 function getZoneById($zone_id) {
     global $conn;
     
-    $stmt = $conn->prepare("SELECT id, name, description, created_at FROM zones WHERE id = ?");
+    $stmt = $conn->prepare("SELECT id, name, description, price, created_at FROM zones WHERE id = ?");
     $stmt->bind_param("i", $zone_id);
     $stmt->execute();
     
     return $stmt->get_result()->fetch_assoc();
+}
+
+// Check if zone name exists (excluding specific ID)
+function zoneNameExists($name, $exclude_id = 0) {
+    global $conn;
+    
+    if ($exclude_id > 0) {
+        $stmt = $conn->prepare("SELECT id FROM zones WHERE LOWER(name) = LOWER(?) AND id != ?");
+        $stmt->bind_param("si", $name, $exclude_id);
+    } else {
+        $stmt = $conn->prepare("SELECT id FROM zones WHERE LOWER(name) = LOWER(?)");
+        $stmt->bind_param("s", $name);
+    }
+    
+    $stmt->execute();
+    return $stmt->get_result()->num_rows > 0;
+}
+
+// Update zone
+function updateZone($zone_id, $name, $description = '', $price = 0.00) {
+    global $conn;
+    
+    $stmt = $conn->prepare("UPDATE zones SET name = ?, description = ?, price = ?, updated_at = NOW() WHERE id = ?");
+    $stmt->bind_param("ssdi", $name, $description, $price, $zone_id);
+    
+    return $stmt->execute();
 }
 
 // Delete zone
@@ -553,6 +771,51 @@ function removeCollectorFromZone($zone_id, $collector_id) {
     $stmt->bind_param("ii", $zone_id, $collector_id);
     
     return $stmt->execute();
+}
+
+// Assign multiple collectors to a zone (replaces existing assignments)
+function assignMultipleCollectorsToZone($zone_id, $collector_ids) {
+    global $conn;
+    
+    // Start transaction
+    $conn->begin_transaction();
+    
+    try {
+        // Remove all existing assignments for this zone
+        $stmt = $conn->prepare("DELETE FROM zone_collectors WHERE zone_id = ?");
+        $stmt->bind_param("i", $zone_id);
+        $stmt->execute();
+        
+        // Add new assignments
+        $success_count = 0;
+        foreach ($collector_ids as $collector_id) {
+            $collector_id = (int)$collector_id;
+            
+            // Check if collector exists and is a collector
+            $stmt = $conn->prepare("SELECT id FROM users WHERE id = ? AND role = 'collector'");
+            $stmt->bind_param("i", $collector_id);
+            $stmt->execute();
+            if ($stmt->get_result()->num_rows > 0) {
+                // Create assignment
+                $stmt = $conn->prepare("
+                    INSERT INTO zone_collectors (zone_id, collector_id, created_at) 
+                    VALUES (?, ?, NOW())
+                ");
+                $stmt->bind_param("ii", $zone_id, $collector_id);
+                if ($stmt->execute()) {
+                    $success_count++;
+                }
+            }
+        }
+        
+        $conn->commit();
+        return $success_count;
+        
+    } catch (Exception $e) {
+        $conn->rollback();
+        error_log("Multi-collector assignment error: " . $e->getMessage());
+        return false;
+    }
 }
 
 // Get collectors assigned to a zone
@@ -625,6 +888,212 @@ function getAvailableCollectors() {
     ";
     
     return $conn->query($sql);
+}
+
+// REPORTING FUNCTIONS
+
+// Get overall request statistics
+function getRequestStats() {
+    global $conn;
+    
+    $stats = [];
+    
+    // Total requests
+    $result = $conn->query("SELECT COUNT(*) as total FROM requests");
+    $stats['total_requests'] = $result->fetch_assoc()['total'];
+    
+    // Completed requests
+    $result = $conn->query("SELECT COUNT(*) as completed FROM requests WHERE status = 'completed'");
+    $stats['completed_requests'] = $result->fetch_assoc()['completed'];
+    
+    // Pending requests
+    $result = $conn->query("SELECT COUNT(*) as pending FROM requests WHERE status = 'pending'");
+    $stats['pending_requests'] = $result->fetch_assoc()['pending'];
+    
+    // Cancelled requests
+    $result = $conn->query("SELECT COUNT(*) as cancelled FROM requests WHERE status = 'cancelled'");
+    $stats['cancelled_requests'] = $result->fetch_assoc()['cancelled'];
+    
+    return $stats;
+}
+
+// Get payment statistics
+function getPaymentStats() {
+    global $conn;
+    
+    $stats = [];
+    
+    // Total payments
+    $result = $conn->query("SELECT COUNT(*) as total FROM payments WHERE status != 'failed'");
+    $stats['total_payments'] = $result->fetch_assoc()['total'];
+    
+    // Total revenue
+    $result = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE status = 'completed'");
+    $stats['total_revenue'] = $result->fetch_assoc()['total'];
+    
+    // Average payment
+    $result = $conn->query("SELECT COALESCE(AVG(amount), 0) as average FROM payments WHERE status = 'completed'");
+    $stats['average_payment'] = $result->fetch_assoc()['average'];
+    
+    // Collected revenue (same as total for now)
+    $stats['collected_revenue'] = $stats['total_revenue'];
+    
+    return $stats;
+}
+
+// Get top performing collectors
+function getTopCollectors($limit = 5) {
+    global $conn;
+    
+    $sql = "
+        SELECT 
+            u.name as collector_name,
+            COUNT(r.id) as total_collections,
+            COALESCE(SUM(p.amount), 0) as total_revenue
+        FROM users u
+        LEFT JOIN requests r ON u.id = r.collector_id AND r.status = 'completed'
+        LEFT JOIN payments p ON r.id = p.request_id AND p.status = 'completed'
+        WHERE u.role = 'collector'
+        GROUP BY u.id, u.name
+        ORDER BY total_collections DESC, total_revenue DESC
+        LIMIT ?
+    ";
+    
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $limit);
+    $stmt->execute();
+    
+    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+}
+
+// Get zone performance statistics
+function getZoneStats() {
+    global $conn;
+    
+    $sql = "
+        SELECT 
+            z.name as zone_name,
+            COUNT(r.id) as total_requests,
+            COUNT(CASE WHEN r.status = 'completed' THEN 1 END) as completed_requests,
+            COALESCE(SUM(CASE WHEN p.status = 'completed' THEN p.amount ELSE 0 END), 0) as total_revenue
+        FROM zones z
+        LEFT JOIN requests r ON z.name = r.location
+        LEFT JOIN payments p ON r.id = p.request_id
+        GROUP BY z.id, z.name
+        ORDER BY total_requests DESC
+    ";
+    
+    return $conn->query($sql)->fetch_all(MYSQLI_ASSOC);
+}
+
+// Get revenue trend over time (daily)
+function getRevenueTrend($days = 7) {
+    global $conn;
+    
+    $sql = "
+        SELECT 
+            DATE(p.created_at) as date,
+            COALESCE(SUM(p.amount), 0) as total_revenue
+        FROM payments p
+        WHERE p.status = 'completed' 
+        AND p.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+        GROUP BY DATE(p.created_at)
+        ORDER BY date ASC
+    ";
+    
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $days);
+    $stmt->execute();
+    
+    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+}
+
+// Get monthly revenue trend
+function getMonthlyRevenueTrend($months = 6) {
+    global $conn;
+    
+    $sql = "
+        SELECT 
+            DATE_FORMAT(p.created_at, '%Y-%m') as month,
+            COALESCE(SUM(p.amount), 0) as total_revenue
+        FROM payments p
+        WHERE p.status = 'completed' 
+        AND p.created_at >= DATE_SUB(CURDATE(), INTERVAL ? MONTH)
+        GROUP BY DATE_FORMAT(p.created_at, '%Y-%m')
+        ORDER BY month ASC
+    ";
+    
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $months);
+    $stmt->execute();
+    
+    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+}
+
+// Get recent activities for dashboard
+function getRecentActivities($limit = 10) {
+    global $conn;
+    
+    $sql = "
+        (SELECT 
+            'request' as type,
+            CONCAT('New waste collection request from ', u.name) as activity,
+            r.created_at as activity_time
+        FROM requests r
+        JOIN users u ON r.client_id = u.id
+        ORDER BY r.created_at DESC
+        LIMIT ?)
+        UNION ALL
+        (SELECT 
+            'payment' as type,
+            CONCAT('Payment of ₱', FORMAT(p.amount, 2), ' received') as activity,
+            p.created_at as activity_time
+        FROM payments p
+        WHERE p.status = 'completed'
+        ORDER BY p.created_at DESC
+        LIMIT ?)
+        ORDER BY activity_time DESC
+        LIMIT ?
+    ";
+    
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("iii", $limit, $limit, $limit);
+    $stmt->execute();
+    
+    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+}
+
+// Get customer satisfaction rating (based on completed requests)
+function getCustomerSatisfactionStats() {
+    global $conn;
+    
+    // For now, we'll calculate a basic satisfaction based on completion rate
+    // In the future, you can add a ratings table for actual customer feedback
+    $result = $conn->query("
+        SELECT 
+            COUNT(*) as total_requests,
+            COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_requests,
+            COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_requests
+        FROM requests
+    ");
+    
+    $stats = $result->fetch_assoc();
+    
+    if ($stats['total_requests'] > 0) {
+        $completion_rate = $stats['completed_requests'] / $stats['total_requests'];
+        $cancellation_rate = $stats['cancelled_requests'] / $stats['total_requests'];
+        
+        // Calculate satisfaction score (4.0-5.0 based on completion rate)
+        $satisfaction_score = 4.0 + ($completion_rate * 1.0) - ($cancellation_rate * 0.5);
+        $satisfaction_score = max(1.0, min(5.0, $satisfaction_score)); // Clamp between 1-5
+    } else {
+        $satisfaction_score = 4.5; // Default score
+    }
+    
+    return [
+        'score' => round($satisfaction_score, 1),
+        'total_reviews' => $stats['completed_requests']
+    ];
 }
 
 // Initialize tables only once

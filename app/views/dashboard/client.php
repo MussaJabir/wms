@@ -7,20 +7,35 @@ $client = getCurrentUser();
 // Get client's requests
 $requests = getClientRequests($client['id']);
 
+// Get all available zones for the dropdown
+$zones = getAllZones();
+
 // Disable layout to prevent duplicate sidebars
 $layout = false;
 
 // Handle new request submission
 if (isPost() && isset($_POST['submit_request'])) {
     if (verifyCSRFToken($_POST['csrf_token'] ?? '')) {
-        $location = sanitize($_POST['location'] ?? '');
+        $zone_id = $_POST['zone_id'] ?? '';
         $pickup_date = $_POST['pickup_date'] ?? '';
         $notes = sanitize($_POST['notes'] ?? '');
         
-        if (empty($location) || empty($pickup_date)) {
+        if (empty($zone_id) || empty($pickup_date)) {
             setFlashMessage('error', 'Please fill in all required fields');
         } else {
-            if (createRequest($client['id'], $location, $pickup_date, $notes)) {
+            // Get zone name for the location field
+            $zone_name = '';
+            if ($zones) {
+                $zones->data_seek(0); // Reset pointer
+                while ($zone = $zones->fetch_assoc()) {
+                    if ($zone['id'] == $zone_id) {
+                        $zone_name = $zone['name'];
+                        break;
+                    }
+                }
+            }
+            
+            if (createRequest($client['id'], $zone_name, $pickup_date, $notes)) {
                 setFlashMessage('success', 'Request submitted successfully');
             } else {
                 setFlashMessage('error', 'Failed to submit request');
@@ -51,15 +66,38 @@ if (isPost() && isset($_POST['submit_payment'])) {
     if (verifyCSRFToken($_POST['csrf_token'] ?? '')) {
         $request_id = $_POST['request_id'] ?? 0;
         $amount = floatval($_POST['amount'] ?? 0);
+        $payment_type = $_POST['payment_type'] ?? '';
         
+        // Validate basic fields
         if ($amount <= 0) {
             setFlashMessage('error', 'Please enter a valid payment amount');
+            redirect('client');
+            exit();
+        }
+        
+        if ($payment_type !== 'phone') {
+            setFlashMessage('error', 'Please select phone payment method');
+            redirect('client');
+            exit();
+        }
+        
+        // Prepare payment details for phone payment
+        $payment_details = [];
+        
+        $phone_provider = $_POST['phone_provider'] ?? '';
+        if (!in_array($phone_provider, ['Mpesa', 'Halopesa', 'AirtelMoney', 'MixbyYas'])) {
+            setFlashMessage('error', 'Please select a valid phone payment provider');
+            redirect('client');
+            exit();
+        }
+        $payment_details['phone_provider'] = $phone_provider;
+        
+        // Create payment with payment method details
+        if (createPayment($client['id'], $request_id, $amount, $payment_type, $payment_details)) {
+            $payment_method_text = "via {$payment_details['phone_provider']}";
+            setFlashMessage('success', "Payment submitted successfully {$payment_method_text}. The collector will confirm upon service completion.");
         } else {
-            if (createPayment($client['id'], $request_id, $amount)) {
-                setFlashMessage('success', 'Payment submitted successfully. The collector will confirm upon service completion.');
-            } else {
-                setFlashMessage('error', 'Failed to submit payment. Please try again.');
-            }
+            setFlashMessage('error', 'Failed to submit payment. Please try again.');
         }
         redirect('client');
         exit();
@@ -81,6 +119,9 @@ if (isPost() && isset($_POST['submit_payment'])) {
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
     <!-- DataTables -->
     <link href="https://cdn.datatables.net/1.11.5/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <!-- Select2 -->
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" rel="stylesheet">
     <!-- SweetAlert2 -->
     <link href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css" rel="stylesheet">
     
@@ -258,6 +299,104 @@ if (isPost() && isset($_POST['submit_payment'])) {
                 display: none;
             }
         }
+
+        /* Empty State Styling */
+        .empty-state {
+            padding: 2rem;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+        .empty-state-icon {
+            animation: float 6s ease-in-out infinite;
+        }
+
+        .empty-state-title {
+            color: #495057;
+            font-weight: 600;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .empty-state-description {
+            font-size: 1rem;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+        }
+
+        .alert-sm {
+            font-size: 0.75rem;
+            line-height: 1.2;
+            border-radius: 6px;
+        }
+
+        .empty-state .btn-lg {
+            padding: 0.75rem 2rem;
+            font-size: 1.1rem;
+            border-radius: 50px;
+            box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .empty-state .btn-lg:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 123, 255, 0.4);
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        /* Table responsive improvements */
+        .table-responsive {
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+
+        .card-header {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        .card-header h5 {
+            color: #495057;
+            font-weight: 600;
+        }
+
+        .card-header i {
+            color: #007bff;
+            margin-right: 8px;
+        }
+
+        /* Payment Method Cards */
+        .payment-method-card {
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            height: 100%;
+        }
+
+        .payment-method-card:hover {
+            border-color: #007bff;
+            box-shadow: 0 4px 15px rgba(0, 123, 255, 0.1);
+        }
+
+        .payment-method-card input[type="radio"]:checked + label {
+            color: #007bff;
+        }
+
+        .payment-fields {
+            transition: all 0.3s ease;
+        }
+
+        .alert-sm {
+            font-size: 0.75rem;
+            line-height: 1.2;
+            border-radius: 6px;
+        }
     </style>
 </head>
 <body>
@@ -319,66 +458,133 @@ if (isPost() && isset($_POST['submit_payment'])) {
             <!-- Requests Table -->
             <div class="card">
                 <div class="card-header">
-                    <h5 class="card-title mb-0">My Requests</h5>
+                    <h5 class="card-title mb-0">
+                        <i class='bx bx-clipboard'></i> My Requests
+                    </h5>
                 </div>
                 <div class="card-body">
-                    <table class="table table-striped" id="requestsTable">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Location</th>
-                                <th>Date</th>
-                                <th>Status</th>
-                                <th>Collector</th>
-                                <th>Payment</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php while ($request = $requests->fetch_assoc()): ?>
+                    <?php 
+                    // Check if there are any requests to display
+                    $has_requests = false;
+                    $request_rows = [];
+                    
+                    // Store all request data first
+                    while ($request = $requests->fetch_assoc()) {
+                        $has_requests = true;
+                        $request_rows[] = $request;
+                    }
+                    
+                    if ($has_requests):
+                    ?>
+                    <div class="table-responsive">
+                        <table class="table table-striped" id="requestsTable">
+                            <thead>
                                 <tr>
-                                    <td>#<?php echo $request['id']; ?></td>
-                                    <td><?php echo htmlspecialchars($request['location']); ?></td>
-                                    <td><?php echo formatDate($request['pickup_date']); ?></td>
-                                    <td><?php echo getStatusBadge($request['status']); ?></td>
-                                    <td>
-                                        <?php if ($request['collector_name']): ?>
-                                            <?php echo htmlspecialchars($request['collector_name']); ?>
-                                        <?php else: ?>
-                                            <span class="text-muted">Not assigned</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <?php if ($request['payment_status']): ?>
-                                            <?php echo getStatusBadge($request['payment_status']); ?>
-                                            <br>
-                                            <small><?php echo formatCurrency($request['payment_amount']); ?></small>
-                                        <?php else: ?>
-                                            <span class="text-muted">No payment</span>
-                                            <br>
-                                            <button type="button" class="btn btn-sm btn-success mt-1" 
-                                                    data-bs-toggle="modal" 
-                                                    data-bs-target="#paymentModal"
-                                                    data-request-id="<?php echo $request['id']; ?>"
-                                                    data-request-location="<?php echo htmlspecialchars($request['location']); ?>">
-                                                <i class='bx bx-credit-card'></i> Pay Now
-                                            </button>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <?php if ($request['status'] == 'pending'): ?>
-                                            <button type="button" class="btn btn-sm btn-danger" 
-                                                    data-bs-toggle="modal" 
-                                                    data-bs-target="#cancelRequestModal"
-                                                    data-request-id="<?php echo $request['id']; ?>">
-                                                Cancel
-                                            </button>
-                                        <?php endif; ?>
-                                    </td>
+                                    <th>ID</th>
+                                    <th>Location</th>
+                                    <th>Date</th>
+                                    <th>Status</th>
+                                    <th>Collector</th>
+                                    <th>Payment</th>
+                                    <th>Actions</th>
                                 </tr>
-                            <?php endwhile; ?>
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($request_rows as $request): ?>
+                                    <tr>
+                                        <td>#<?php echo $request['id']; ?></td>
+                                        <td><?php echo htmlspecialchars($request['location']); ?></td>
+                                        <td><?php echo formatDate($request['pickup_date']); ?></td>
+                                        <td><?php echo getStatusBadge($request['status']); ?></td>
+                                        <td>
+                                            <?php if ($request['collector_name']): ?>
+                                                <?php echo htmlspecialchars($request['collector_name']); ?>
+                                            <?php else: ?>
+                                                <span class="text-muted">Not assigned</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <?php if ($request['payment_status'] && $request['payment_status'] == 'completed'): ?>
+                                                <span class="badge bg-success">
+                                                    <i class='bx bx-check'></i> Paid
+                                                </span>
+                                                <br>
+                                                <small><?php echo formatCurrency($request['payment_amount']); ?></small>
+                                            <?php elseif ($request['payment_status'] && $request['payment_status'] == 'pending'): ?>
+                                                <span class="badge bg-warning">
+                                                    <i class='bx bx-time'></i> Payment Pending
+                                                </span>
+                                                <br>
+                                                <small><?php echo formatCurrency($request['payment_amount']); ?></small>
+                                            <?php else: ?>
+                                                <?php if ($request['status'] == 'completed'): ?>
+                                                    <div class="alert alert-warning alert-sm p-2 mb-1">
+                                                        <small><strong>Payment Required</strong><br>
+                                                        Service completed - please pay now</small>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <span class="text-muted">No payment required yet</span>
+                                                    <br>
+                                                <?php endif; ?>
+                                                <button type="button" class="btn btn-sm btn-success mt-1" 
+                                                        data-bs-toggle="modal" 
+                                                        data-bs-target="#paymentModal"
+                                                        data-request-id="<?php echo $request['id']; ?>"
+                                                        data-request-location="<?php echo htmlspecialchars($request['location']); ?>"
+                                                        data-zone-price="<?php 
+                                                            // Get zone price for this request location
+                                                            $zones_temp = getAllZones();
+                                                            $zone_price = 150.00; // default
+                                                            if ($zones_temp) {
+                                                                while ($zone_temp = $zones_temp->fetch_assoc()) {
+                                                                    if ($zone_temp['name'] == $request['location']) {
+                                                                        $zone_price = $zone_temp['price'] ?? 150.00;
+                                                                        break;
+                                                                    }
+                                                                }
+                                                            }
+                                                            echo $zone_price;
+                                                        ?>">
+                                                    <i class='bx bx-credit-card'></i> 
+                                                    <?php echo ($request['status'] == 'completed') ? 'Pay Now' : 'Pre-pay'; ?>
+                                                </button>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>
+                                            <?php if ($request['status'] == 'pending'): ?>
+                                                <button type="button" class="btn btn-sm btn-danger" 
+                                                        data-bs-toggle="modal" 
+                                                        data-bs-target="#cancelRequestModal"
+                                                        data-request-id="<?php echo $request['id']; ?>">
+                                                    Cancel
+                                                </button>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    <?php else: ?>
+                        <!-- Modern Empty State -->
+                        <div class="text-center py-5">
+                            <div class="empty-state">
+                                <div class="empty-state-icon mb-4">
+                                    <i class='bx bx-clipboard' style="font-size: 4rem; color: #6c757d;"></i>
+                                </div>
+                                <h4 class="empty-state-title">No Active Requests</h4>
+                                <p class="empty-state-description text-muted mb-4">
+                                    You haven't made any waste collection requests yet.<br>
+                                    Get started by creating your first request!
+                                </p>
+                                <button type="button" class="btn btn-primary btn-lg" 
+                                        data-bs-toggle="modal" 
+                                        data-bs-target="#newRequestModal">
+                                    <i class='bx bx-plus'></i> Create New Request
+                                </button>
+                            </div>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -397,26 +603,62 @@ if (isPost() && isset($_POST['submit_payment'])) {
                     </div>
                     
                     <div class="modal-body">
-                        <div class="mb-3">
-                            <label for="location" class="form-label">Collection Location</label>
-                            <textarea class="form-control" id="location" name="location" rows="2" required></textarea>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label for="pickup_date" class="form-label">Pickup Date</label>
-                            <input type="date" class="form-control" id="pickup_date" name="pickup_date" 
-                                   min="<?php echo date('Y-m-d'); ?>" required>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label for="notes" class="form-label">Additional Notes</label>
-                            <textarea class="form-control" id="notes" name="notes" rows="3"></textarea>
-                        </div>
+                        <?php if ($zones && $zones->num_rows > 0): ?>
+                            <div class="mb-3">
+                                <label for="zone_id" class="form-label">Collection Zone</label>
+                                <select class="form-select" id="zone_id" name="zone_id" required>
+                                    <option value="">Select a collection zone</option>
+                                    <?php 
+                                    // Reset zones pointer and populate dropdown
+                                    $zones->data_seek(0); // Reset pointer
+                                    while ($zone = $zones->fetch_assoc()): 
+                                    ?>
+                                                                            <option value="<?php echo $zone['id']; ?>" data-price="<?php echo $zone['price'] ?? 0; ?>">
+                                        <?php echo htmlspecialchars($zone['name']); ?>
+                                        <?php if (!empty($zone['description'])): ?>
+                                            - <?php echo htmlspecialchars($zone['description']); ?>
+                                        <?php endif; ?>
+                                        - <?php echo formatCurrency($zone['price'] ?? 0); ?>
+                                    </option>
+                                    <?php endwhile; ?>
+                                </select>
+                                <div class="form-text">Choose the zone where you want waste collection service.</div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="pickup_date" class="form-label">Pickup Date</label>
+                                <input type="date" class="form-control" id="pickup_date" name="pickup_date" 
+                                       min="<?php echo date('Y-m-d'); ?>" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="notes" class="form-label">Additional Notes</label>
+                                <textarea class="form-control" id="notes" name="notes" rows="3" 
+                                          placeholder="Any special instructions or additional information..."></textarea>
+                            </div>
+                        <?php else: ?>
+                            <div class="alert alert-warning text-center">
+                                <i class='bx bx-map-alt' style="font-size: 2rem;"></i>
+                                <h5 class="mt-2">No Collection Zones Available</h5>
+                                <p class="mb-0">
+                                    No collection zones have been set up yet. Please contact the administrator 
+                                    to create collection zones in your area.
+                                </p>
+                            </div>
+                        <?php endif; ?>
                     </div>
                     
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" name="submit_request" class="btn btn-primary">Submit Request</button>
+                        <?php if ($zones && $zones->num_rows > 0): ?>
+                            <button type="submit" name="submit_request" class="btn btn-primary">
+                                <i class='bx bx-plus'></i> Submit Request
+                            </button>
+                        <?php else: ?>
+                            <button type="button" class="btn btn-primary" disabled>
+                                <i class='bx bx-x'></i> Cannot Submit - No Zones
+                            </button>
+                        <?php endif; ?>
                     </div>
                 </form>
             </div>
@@ -472,34 +714,54 @@ if (isPost() && isset($_POST['submit_payment'])) {
                             <label for="amount" class="form-label">Payment Amount (PHP)</label>
                             <input type="number" class="form-control" id="amount" name="amount" 
                                    step="0.01" min="0" required>
-                            <div class="form-text">Enter the amount you want to pay for this service.</div>
+                            <div class="form-text">Amount is auto-filled based on zone pricing. You can adjust if needed.</div>
                         </div>
                         
                         <div class="mb-3">
                             <label class="form-label">Payment Method</label>
-                            <div class="form-check">
-                                <input class="form-check-input" type="radio" name="payment_method" id="cash" value="cash" checked>
-                                <label class="form-check-label" for="cash">
-                                    <i class='bx bx-money'></i> Cash Payment
-                                </label>
-                            </div>
-                            <div class="form-check">
-                                <input class="form-check-input" type="radio" name="payment_method" id="gcash" value="gcash">
-                                <label class="form-check-label" for="gcash">
-                                    <i class='bx bx-mobile'></i> GCash
-                                </label>
-                            </div>
-                            <div class="form-check">
-                                <input class="form-check-input" type="radio" name="payment_method" id="bank" value="bank">
-                                <label class="form-check-label" for="bank">
-                                    <i class='bx bx-building-house'></i> Bank Transfer
+                            <div class="form-check payment-method-card">
+                                <input class="form-check-input" type="radio" name="payment_type" id="phone_payment" value="phone" checked>
+                                <label class="form-check-label" for="phone_payment">
+                                    <i class='bx bx-mobile-alt text-primary'></i>
+                                    <strong>Phone Payment</strong>
+                                    <small class="d-block text-muted">Mobile money services</small>
                                 </label>
                             </div>
                         </div>
+
+                        <!-- Phone Payment Fields -->
+                        <div id="phonePaymentFields" class="payment-fields">
+                            <div class="mb-3">
+                                <label for="phone_provider" class="form-label">
+                                    <i class='bx bx-mobile'></i> Select Provider
+                                </label>
+                                <select class="form-select" id="phone_provider" name="phone_provider" required>
+                                    <option value="">Choose your mobile money provider</option>
+                                    <option value="Mpesa">M-Pesa</option>
+                                    <option value="Halopesa">HaloPesa</option>
+                                    <option value="AirtelMoney">Airtel Money</option>
+                                    <option value="MixbyYas">MixbyYas</option>
+                                </select>
+                                <div class="form-text">Select your preferred mobile payment service</div>
+                            </div>
+                            
+                            <div class="alert alert-info">
+                                <i class='bx bx-info-circle'></i>
+                                <strong>How to pay:</strong>
+                                <ol class="mb-0 mt-2">
+                                    <li>Submit this payment request</li>
+                                    <li>You'll receive SMS with payment instructions</li>
+                                    <li>Complete payment through your mobile app</li>
+                                    <li>Collector will confirm payment upon service completion</li>
+                                </ol>
+                            </div>
+                        </div>
+
+
                         
-                        <div class="alert alert-warning">
+                        <div class="alert alert-info">
                             <i class='bx bx-info-circle'></i>
-                            <strong>Note:</strong> Payment will be marked as pending. The collector will confirm the payment upon service completion.
+                            <strong>Payment Process:</strong> Payment will be marked as pending. The collector will confirm the payment upon service completion.
                         </div>
                     </div>
                     
@@ -519,7 +781,9 @@ if (isPost() && isset($_POST['submit_payment'])) {
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
     <script src="https://cdn.datatables.net/1.11.5/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="<?php echo asset('js/payment-methods.js'); ?>"></script>
     
     <script>
         $(document).ready(function() {
@@ -534,19 +798,27 @@ if (isPost() && isset($_POST['submit_payment'])) {
                 });
             <?php endif; ?>
             
-            // Debug: Check if Bootstrap and jQuery are loaded
-            console.log('jQuery version:', $.fn.jquery);
-            console.log('Bootstrap version:', typeof bootstrap !== 'undefined' ? 'Loaded' : 'Not loaded');
-            
-            // Test modal functionality
-            $('[data-bs-toggle="modal"]').on('click', function() {
-                console.log('Modal button clicked:', $(this).data('bs-target'));
-            });
-            
             // Initialize DataTable
             $('#requestsTable').DataTable({
                 order: [[2, 'desc']], // Sort by date
-                pageLength: 10
+                pageLength: 10,
+                responsive: true
+            });
+
+            // Initialize Select2 for zone dropdown
+            $('#zone_id').select2({
+                theme: 'bootstrap-5',
+                placeholder: 'Search and select a collection zone...',
+                allowClear: true,
+                dropdownParent: $('#newRequestModal'),
+                width: '100%'
+            });
+
+            // Reset form and Select2 when modal opens
+            $('#newRequestModal').on('show.bs.modal', function() {
+                $('#zone_id').val('').trigger('change');
+                $('#pickup_date').val('');
+                $('#notes').val('');
             });
 
             // Handle cancel modal data
@@ -561,21 +833,56 @@ if (isPost() && isset($_POST['submit_payment'])) {
                 var button = $(event.relatedTarget);
                 var requestId = button.data('request-id');
                 var requestLocation = button.data('request-location');
+                var zonePrice = button.data('zone-price') || 150.00;
+                
                 $('#paymentRequestId').val(requestId);
                 $('#paymentRequestLocation').text(requestLocation);
+                $('#amount').val(parseFloat(zonePrice).toFixed(2));
+            });
+
+            // Handle zone selection for new requests - show pricing
+            $('#zone_id').on('change', function() {
+                var selectedOption = $(this).find('option:selected');
+                var zonePrice = selectedOption.data('price') || 0;
+                
+                // Remove existing price info
+                $('#zonePriceInfo').remove();
+                
+                if (zonePrice > 0 && selectedOption.val()) {
+                    // Format currency using PHP number format style
+                    var formattedPrice = '₱' + parseFloat(zonePrice).toFixed(2).replace(/\d(?=(\d{3})+\.)/g, '$&,');
+                    
+                    // Show price info below the select
+                    var priceInfo = '<div class="mt-2 alert alert-info" id="zonePriceInfo">' +
+                                   '<i class="bx bx-info-circle"></i> Service price for this zone: <strong>' + 
+                                   formattedPrice + '</strong></div>';
+                    
+                    $(this).closest('.mb-3').append(priceInfo);
+                }
             });
 
             // Set minimum date for pickup date
             var today = new Date().toISOString().split('T')[0];
             document.getElementById('pickup_date').setAttribute('min', today);
+
+            // Reset payment modal when closed
+            $('#paymentModal').on('hidden.bs.modal', function() {
+                $('#phone_provider').val('');
+            });
+
+            // Form validation before submission
+            $('#paymentModal form').on('submit', function(e) {
+                if (!$('#phone_provider').val()) {
+                    e.preventDefault();
+                    Swal.fire({
+                        title: 'Validation Error',
+                        text: 'Please select a phone payment provider',
+                        icon: 'error',
+                        confirmButtonText: 'OK'
+                    });
+                }
+            });
         });
-        
-        // Test function to manually trigger modal
-        function testModal() {
-            console.log('Testing modal...');
-            var modal = new bootstrap.Modal(document.getElementById('newRequestModal'));
-            modal.show();
-        }
     </script>
 </body>
 </html> 

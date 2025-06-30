@@ -83,6 +83,12 @@
             <a href="<?= url('admin/zones') ?>" class="nav-link <?= $currentPage === 'zones' ? 'active' : '' ?>">
                 <i class='bx bx-map-alt'></i> Zones
             </a>
+            <a href="<?= url('admin/requests') ?>" class="nav-link <?= $currentPage === 'requests' ? 'active' : '' ?>">
+                <i class='bx bx-clipboard'></i> All Requests
+            </a>
+            <a href="<?= url('admin/payments') ?>" class="nav-link <?= $currentPage === 'payments' ? 'active' : '' ?>">
+                <i class='bx bx-credit-card'></i> All Payments
+            </a>
             <a href="<?= url('admin/reports') ?>" class="nav-link <?= $currentPage === 'reports' ? 'active' : '' ?>">
                 <i class='bx bx-chart'></i> Reports
             </a>

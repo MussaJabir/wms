@@ -12,6 +12,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $zone_id = (int)($_POST['zone_id'] ?? 0);
         $name = sanitize($_POST['name'] ?? '');
         $description = sanitize($_POST['description'] ?? '');
+        $price = floatval($_POST['price'] ?? 0);
 
         // Validate input
         if ($zone_id <= 0) {
@@ -29,6 +30,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('admin/zones');
         }
 
+        if ($price < 0) {
+            setFlashMessage('error', 'Price cannot be negative');
+            redirect('admin/zones');
+        }
+
         // Check if zone exists
         $zone = getZoneById($zone_id);
         if (!$zone) {
@@ -37,20 +43,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         // Check if zone name already exists for other zones
-        $stmt = $conn->prepare("SELECT id FROM zones WHERE name = ? AND id != ?");
-        $stmt->bind_param("si", $name, $zone_id);
-        $stmt->execute();
-        if ($stmt->get_result()->num_rows > 0) {
+        if (zoneNameExists($name, $zone_id)) {
             setFlashMessage('error', 'Zone name already exists');
             redirect('admin/zones');
         }
 
-        // Update zone
-        $stmt = $conn->prepare("UPDATE zones SET name = ?, description = ?, updated_at = NOW() WHERE id = ?");
-        $stmt->bind_param("ssi", $name, $description, $zone_id);
-
-        if ($stmt->execute()) {
-            setFlashMessage('success', 'Zone updated successfully');
+        // Update zone using database function
+        if (updateZone($zone_id, $name, $description, $price)) {
+            setFlashMessage('success', 'Zone updated successfully with price ' . formatCurrency($price));
         } else {
             setFlashMessage('error', 'Failed to update zone');
         }
